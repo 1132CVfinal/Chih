@@ -144,63 +144,23 @@ class IrisDataset(Dataset):
             return 10
         return len(self.list_files)
 
-    def __getitem__(self, idx):
-        imagepath = osp.join(self.filepath,'images',self.list_files[idx]+'.png')
-        pilimg = Image.open(imagepath).convert("L")
-        H, W = pilimg.width , pilimg.height
-       
-        #PREPROCESSING STEP FOR ALL TRAIN, VALIDATION AND TEST INPUTS 
-        #Fixed gamma value for      
-        table = 255.0*(np.linspace(0, 1, 256)**0.8)
-        pilimg = cv2.LUT(np.array(pilimg), table)
-        
+    def __getitem__(self, index):
+        # 讀圖片
+        img = Image.open(self.image_paths[index]).convert('L')
+        img = self.transform(img)
 
-        if self.split != 'test':
-            labelpath = osp.join(self.filepath,'labels',self.list_files[idx]+'.npy')
-            label = np.load(labelpath)    
-            label = np.resize(label,(W,H))
-            label = Image.fromarray(label)     
-               
-        if self.transform is not None:
-            if self.split == 'train':
-                if random.random() < 0.2: 
-                    pilimg = Starburst_augment()(np.array(pilimg))  
-                if random.random() < 0.2: 
-                    pilimg = Line_augment()(np.array(pilimg))    
-                if random.random() < 0.2:
-                    pilimg = Gaussian_blur()(np.array(pilimg))   
-                if random.random() < 0.4:
-                    pilimg, label = Translation()(np.array(pilimg),np.array(label))
-                
-        img = self.clahe.apply(np.array(np.uint8(pilimg)))    
-        img = Image.fromarray(img)      
-            
-        if self.transform is not None:
-            if self.split == 'train':
-                img, label = RandomHorizontalFlip()(img,label)
-            img = self.transform(img)    
-
-
-        if self.split != 'test':
-            ## This is for boundary aware cross entropy calculation
-            spatialWeights = cv2.Canny(np.array(label),0,3)/255
-            spatialWeights=cv2.dilate(spatialWeights,(3,3),iterations = 1)*20
-            
-            ##This is the implementation for the surface loss
-            # Distance map for each class
-            distMap = []
-            for i in range(0, 4):
-                distMap.append(one_hot2dist(np.array(label)==i))
-            distMap = np.stack(distMap, 0)           
-#            spatialWeights=np.float32(distMap) 
-            
-            
         if self.split == 'test':
-            ##since label, spatialWeights and distMap is not needed for test images
-            return img,0,self.list_files[idx],0,0
-            
-        label = MaskToTensor()(label)
-        return img, label, self.list_files[idx],spatialWeights,np.float32(distMap) 
+            # 測試階段只回傳圖片與 index
+            return img, os.path.basename(self.image_paths[index]).split('.')[0]
+
+        # 其餘（訓練或驗證）則繼續處理 label, weight, maxDist
+        label = Image.open(self.label_paths[index])
+        label = self.transform(label)
+        
+        spatialWeights = ...
+        maxDist = ...
+        
+        return img, label, index, spatialWeights, maxDist
 
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
