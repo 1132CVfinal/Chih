@@ -77,6 +77,27 @@ class RITNetInference:
         
         return vis
 
+    # ADDED
+    def crop_iris(self, image):
+        """
+        對傳入的 gray-scale image (np.ndarray) 先做 segmentation，
+        找 iris_mask 上非零的 bounding‐box，再把原始 image 裁切，回傳裁切後只剩 iris 的影像。
+        如果沒偵測到 iris，就直接回傳整張原圖。
+        """
+        iris_mask, pupil_mask, sclera_mask, background_mask = self.segment_iris(image)
+        # 只關心 iris_mask
+        ys, xs = np.where(iris_mask > 0)
+        if len(xs) == 0 or len(ys) == 0:
+            # 如果根本沒有偵測到 iris，就回傳原始 gray image
+            return image
+        # bounding box：xmin, xmax, ymin, ymax
+        xmin, xmax = xs.min(), xs.max()
+        ymin, ymax = ys.min(), ys.max()
+        # 注意：numpy slicing 是 [ymin : ymax+1, xmin : xmax+1]
+        cropped = image[ymin : ymax+1, xmin : xmax+1]
+        return cropped
+
+
 if __name__ == "__main__":
     ritnet = RITNetInference('best_model.pkl')
     
