@@ -43,10 +43,18 @@ class SegmentationDataset(Dataset):
     def __getitem__(self, idx):
         rel_path = self.image_paths[idx]
         img_path = os.path.join(self.root_dir, rel_path)
-        mask_path = os.path.join(self.mask_dir, rel_path.replace('.jpg', '_mask.png'))
+        if rel_path.endswith('.jpg'):
+            mask_path = os.path.join(self.mask_dir, rel_path.replace('.jpg', '_mask.png'))
+        elif rel_path.endswith('.png'):
+            mask_path = os.path.join(self.mask_dir, rel_path.replace('.png', '_mask.png'))
+        else:
+            raise ValueError(f"Unsupported file extension in path: {rel_path}")
 
         image = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
         mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+        desired_size = (256, 256)
+        image = cv2.resize(image, desired_size)
+        mask = cv2.resize(mask, desired_size)
 
         if image is None:
             raise FileNotFoundError(f"Image not found: {img_path}")
