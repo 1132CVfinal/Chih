@@ -21,10 +21,10 @@ def main(image_list_txt, input_root='train_dataset', mask_root='masks', model_pa
 
     for img_path in img_paths:
         full_img_path = img_path.replace('\\', os.sep)  # 兼容不同系統路徑
-        print(f"Processing {full_img_path} ...")
+        #print(f"Processing {full_img_path} ...")
         img = cv2.imread(full_img_path, cv2.IMREAD_GRAYSCALE)
         if img is None:
-            print(f"Warning: Cannot load image {full_img_path}, skipping.")
+            #print(f"Warning: Cannot load image {full_img_path}, skipping.")
             continue
 
         iris_mask, pupil_mask, sclera_mask, background_mask = ritnet.segment_iris(img)
@@ -35,7 +35,7 @@ def main(image_list_txt, input_root='train_dataset', mask_root='masks', model_pa
         mask_save_path = make_mask_path(full_img_path, input_root, mask_root)
         ensure_dir(mask_save_path)
         cv2.imwrite(mask_save_path, mask_to_save)
-        print(f"Saved mask to {mask_save_path}")
+        #print(f"Saved mask to {mask_save_path}")
 
 if __name__ == "__main__":
     main('all.txt')
