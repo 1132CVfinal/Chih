@@ -8,6 +8,7 @@ import cv2
 from torchvision import transforms
 import torch.nn.functional as F
 from densenet import DenseNet2D
+import math
 
 class RITNetInference:
     def __init__(self, model_path='best_model.pkl', device='cuda' if torch.cuda.is_available() else 'cpu'):
@@ -113,6 +114,46 @@ class RITNetInference:
         pupil_bbox = get_bbox(pupil_mask)
 
         return iris_bbox, pupil_bbox
+        
+
+    def normalize_iris(self, image, iris_bbox, pupil_bbox, output_height=32, output_width=64):
+        """
+        簡單實作：根據 iris 與 pupil 的 bounding box 做 polar 展開。
+        回傳一張 shape = (32, 64) 的灰階圖像（np.ndarray）。
+        """
+
+        def get_center_radius(bbox):
+            x_min, y_min, x_max, y_max = bbox
+            cx = (x_min + x_max) // 2
+            cy = (y_min + y_max) // 2
+            r = max((x_max - x_min), (y_max - y_min)) // 2
+            return cx, cy, r
+
+        # 若 bbox 其中一個是 None，則回傳 None
+        if iris_bbox is None or pupil_bbox is None:
+            return None
+
+        iris_cx, iris_cy, iris_r = get_center_radius(iris_bbox)
+        pupil_cx, pupil_cy, pupil_r = get_center_radius(pupil_bbox)
+
+        # output image
+        polar_img = np.zeros((output_height, output_width), dtype=np.uint8)
+
+        for theta_idx in range(output_width):
+            theta = 2 * math.pi * theta_idx / output_width
+            for r_idx in range(output_height):
+                r_frac = r_idx / output_height
+                # interpolate between pupil and iris circle
+                x = int((1 - r_frac) * pupil_cx + r_frac * iris_cx + 
+                        ((1 - r_frac) * pupil_r + r_frac * iris_r) * math.cos(theta))
+                y = int((1 - r_frac) * pupil_cy + r_frac * iris_cy + 
+                        ((1 - r_frac) * pupil_r + r_frac * iris_r) * math.sin(theta))
+
+                if 0 <= x < image.shape[1] and 0 <= y < image.shape[0]:
+                    polar_img[r_idx, theta_idx] = image[y, x]
+
+        return polar_img
+
 
 
 
