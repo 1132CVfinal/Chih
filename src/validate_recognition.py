@@ -104,5 +104,7 @@ def main():
     d_prime = abs(g_mean - i_mean) / np.sqrt(0.5 * (g_var + i_var))
     print(f"d' = {d_prime:.4f}")
 
+import torch.multiprocessing as mp
+mp.set_start_method('spawn', force=True)
 if __name__ == "__main__":
     main()

@@ -197,5 +197,7 @@ def main():
     torch.save(model.state_dict(), "siamese_final.pth")
     print("Training completed. Model saved to siamese_final.pth")
 
+import torch.multiprocessing as mp
+mp.set_start_method('spawn', force=True)
 if __name__ == "__main__":
     main()
