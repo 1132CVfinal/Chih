@@ -145,13 +145,16 @@ class PolarDataset(Dataset):
         iris_mask, pupil_mask, _, _ = self.ritnet.segment_iris(img)
 
         # boundary + normalization
+        print("find_iris_boundaries")
         boundaries = self.improved.find_iris_boundaries(iris_mask, pupil_mask)
         iris_bbox, pupil_bbox = boundaries
         normalized = None
         if iris_bbox is not None and pupil_bbox is not None:
+            print("normalize_iris")
             normalized = self.improved.normalize_iris(img, iris_bbox, pupil_bbox)
 
         if normalized is None:
+            print("fallback")
             fallback = cv2.resize(img, (64, 32), interpolation=cv2.INTER_LINEAR)
             normalized = fallback.astype(np.uint8)
 
