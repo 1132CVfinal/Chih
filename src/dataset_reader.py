@@ -134,36 +134,36 @@ class PolarDataset(Dataset):
     def __len__(self):
         return len(self.image_paths)
 
-def __getitem__(self, idx):
-    rel_path = self.image_paths[idx]
-    abs_path = os.path.join(self.root_dir, rel_path)
-    img = cv2.imread(abs_path, cv2.IMREAD_GRAYSCALE)
-    if img is None:
-        raise FileNotFoundError(f"Cannot read image at {abs_path}")
+    def __getitem__(self, idx):
+        rel_path = self.image_paths[idx]
+        abs_path = os.path.join(self.root_dir, rel_path)
+        img = cv2.imread(abs_path, cv2.IMREAD_GRAYSCALE)
+        if img is None:
+            raise FileNotFoundError(f"Cannot read image at {abs_path}")
 
-    # segmentation → 取得 iris_mask, pupil_mask
-    iris_mask, pupil_mask, _, _ = self.ritnet.segment_iris(img)
+        # segmentation → 取得 iris_mask, pupil_mask
+        iris_mask, pupil_mask, _, _ = self.ritnet.segment_iris(img)
 
-    # boundary + normalization
-    print("find_iris_boundaries")
-    pupil_center, pupil_radius, iris_center, iris_radius = self.improved.find_iris_boundaries(iris_mask, pupil_mask)
-    normalized = None
+        # boundary + normalization
+        print("find_iris_boundaries")
+        pupil_center, pupil_radius, iris_center, iris_radius = self.improved.find_iris_boundaries(iris_mask, pupil_mask)
+        normalized = None
 
-    if all(v is not None for v in [pupil_center, pupil_radius, iris_center, iris_radius]):
-        if pupil_radius > 0 and iris_radius > pupil_radius:
-            print(f"normalize_iris with pupil_center={pupil_center}, pupil_radius={pupil_radius}, iris_center={iris_center}, iris_radius={iris_radius}")
-            normalized = self.improved.normalize_iris(img, pupil_center, pupil_radius, iris_center, iris_radius)
+        if all(v is not None for v in [pupil_center, pupil_radius, iris_center, iris_radius]):
+            if pupil_radius > 0 and iris_radius > pupil_radius:
+                print(f"normalize_iris with pupil_center={pupil_center}, pupil_radius={pupil_radius}, iris_center={iris_center}, iris_radius={iris_radius}")
+                normalized = self.improved.normalize_iris(img, pupil_center, pupil_radius, iris_center, iris_radius)
+            else:
+                print(f"Invalid radii: pupil_radius={pupil_radius}, iris_radius={iris_radius}")
         else:
-            print(f"Invalid radii: pupil_radius={pupil_radius}, iris_radius={iris_radius}")
-    else:
-        print(f"Invalid boundaries: pupil_center={pupil_center}, pupil_radius={pupil_radius}, iris_center={iris_center}, iris_radius={iris_radius}")
+            print(f"Invalid boundaries: pupil_center={pupil_center}, pupil_radius={pupil_radius}, iris_center={iris_center}, iris_radius={iris_radius}")
 
-    if normalized is None:
-        print("fallback to resize original image")
-        fallback = cv2.resize(img, (64, 32), interpolation=cv2.INTER_LINEAR)
-        normalized = fallback.astype(np.uint8)
+        if normalized is None:
+            print("fallback to resize original image")
+            fallback = cv2.resize(img, (64, 32), interpolation=cv2.INTER_LINEAR)
+            normalized = fallback.astype(np.uint8)
 
-    normalized_resized = cv2.resize(normalized, self.desired_size, interpolation=cv2.INTER_LINEAR)
-    tensor = torch.tensor(normalized_resized / 255.0, dtype=torch.float32).unsqueeze(0)
+        normalized_resized = cv2.resize(normalized, self.desired_size, interpolation=cv2.INTER_LINEAR)
+        tensor = torch.tensor(normalized_resized / 255.0, dtype=torch.float32).unsqueeze(0)
 
-    return tensor, rel_path
+        return tensor, rel_path
