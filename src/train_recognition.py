@@ -1,10 +1,13 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
+import random
 import os
-from dataset_reader import SegmentationDataset  # 使用你的 SegmentationDataset
+from PIL import Image  # SiamesePairsDataset 需要使用 PIL 來開 PNG/JPG
+
+from dataset_reader import SegmentationDataset  # 你前面已經寫好的
 
 # ----------- Simple Siamese Network ----------- #
 class SiameseNetwork(nn.Module):
@@ -18,7 +21,7 @@ class SiameseNetwork(nn.Module):
             nn.ReLU(),
             nn.MaxPool2d(2),
             nn.Flatten(),
-            nn.Linear(64 * 64 * 64, 256),  # 假設 input image size 是 256x256
+            nn.Linear(64 * 64 * 64, 256),  # 對應輸入 256×256 經過兩次 MaxPool → 64×64
             nn.ReLU(),
             nn.Linear(256, 128)
         )
@@ -31,6 +34,7 @@ class SiameseNetwork(nn.Module):
         out2 = self.forward_once(x2)
         return out1, out2
 
+
 # ----------- Contrastive Loss ----------- #
 class ContrastiveLoss(nn.Module):
     def __init__(self, margin=1.0):
@@ -39,211 +43,176 @@ class ContrastiveLoss(nn.Module):
 
     def forward(self, output1, output2, label):
         euclidean_distance = nn.functional.pairwise_distance(output1, output2)
-        loss = torch.mean((1 - label) * torch.pow(euclidean_distance, 2) +
-                          label * torch.pow(torch.clamp(self.margin - euclidean_distance, min=0.0), 2))
+        loss = torch.mean(
+            (1 - label) * torch.pow(euclidean_distance, 2) +
+            label * torch.pow(torch.clamp(self.margin - euclidean_distance, min=0.0), 2)
+        )
         return loss
 
-# ----------- Pair Generator Dataset ----------- #
-import random
-class SiameseDataset(torch.utils.data.Dataset):
-    def __init__(self, base_dataset):
-        self.base_dataset = base_dataset
-        self.labels = [os.path.basename(p).split('_')[0] for p in base_dataset.image_paths]
 
-    def __len__(self):
-        return len(self.base_dataset)
-
-    def __getitem__(self, idx):
-        img1, _ = self.base_dataset[idx]
-        label1 = self.labels[idx]
-
-        should_get_same_class = random.randint(0, 1)
-        while True:
-            idx2 = random.randint(0, len(self.base_dataset) - 1)
-            label2 = self.labels[idx2]
-            if (label1 == label2) == bool(should_get_same_class):
-                break
-
-        img2, _ = self.base_dataset[idx2]
-        label = torch.tensor([int(label1 != label2)], dtype=torch.float32)
-        return img1, img2, label
-
-# ----------- Training Loop ----------- #
-def train():
-    transform = transforms.Compose([
-        transforms.Resize((256, 256)),
-        transforms.ToTensor()
-    ])
-
-    base_dataset = SegmentationDataset('train.txt', transform=None)
-    train_dataset = SiameseDataset(base_dataset)
-    train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
-
-    model = SiameseNetwork().cuda()
-    criterion = ContrastiveLoss()
-    optimizer = optim.Adam(model.parameters(), lr=1e-3)
-
-    for epoch in range(30):
-        total_loss = 0.0
-        model.train()
-        for img1, img2, label in train_loader:
-            img1, img2, label = img1.cuda(), img2.cuda(), label.cuda()
-            output1, output2 = model(img1, img2)
-            loss = criterion(output1, output2, label)
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            total_loss += loss.item()
-
-        print(f"Epoch {epoch+1}, Loss: {total_loss / len(train_loader):.4f}")
-
-    torch.save(model.state_dict(), 'siamese_model.pth')
-    print("Model saved to siamese_model.pth")
-
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader
-import random
-from dataset_reader import SegmentationDataset
-import os
-
-# SiameseDataset: 組合成 (img1, img2, label)
+# ----------- SiameseDataset：使用 SegmentationDataset 建立 pair ----------- #
 class SiameseDataset(Dataset):
     def __init__(self, base_dataset):
+        """
+        base_dataset: 一個 SegmentationDataset，回傳 (image, mask) 或 (image, _) 
+                      這裡只需要 image，因此取 0。
+        """
         self.base_dataset = base_dataset
-        self.labels = self._build_labels()
+        # 解析 person_id；假設路徑格式為 'CASIA-Iris-Thousand/447/L/S5447L00.jpg'
+        self.labels = [path.split('/')[1] for path in base_dataset.image_paths]
 
-    def _build_labels(self):
+        # 將相同 person_id 的索引集合起來
         from collections import defaultdict
         label_dict = defaultdict(list)
-        for i, path in enumerate(self.base_dataset.image_paths):
-            person_id = path.split('/')[1]
+        for i, person_id in enumerate(self.labels):
             label_dict[person_id].append(i)
-        return label_dict
+        self.label_dict = label_dict
 
     def __len__(self):
         return len(self.base_dataset)
 
     def __getitem__(self, idx):
+        # 取出第一張影像
         img1, _ = self.base_dataset[idx]
-        person1 = self.base_dataset.image_paths[idx].split('/')[1]
+        person1 = self.labels[idx]
 
+        # 隨機決定要同人 (positive) 還是不同人 (negative)
         if random.random() < 0.5:
-            # positive pair
+            # positive：同一人的另一張
             idx2 = idx
             while idx2 == idx:
-                idx2 = random.choice(self.labels[person1])
+                idx2 = random.choice(self.label_dict[person1])
             label = 1.0
         else:
-            # negative pair
-            person2 = random.choice(list(self.labels.keys()))
+            # negative：不同人
+            person2 = random.choice(list(self.label_dict.keys()))
             while person2 == person1:
-                person2 = random.choice(list(self.labels.keys()))
-            idx2 = random.choice(self.labels[person2])
+                person2 = random.choice(list(self.label_dict.keys()))
+            idx2 = random.choice(self.label_dict[person2])
             label = 0.0
 
         img2, _ = self.base_dataset[idx2]
-        return (img1, img2), torch.tensor(label, dtype=torch.float32)
+        return img1, img2, torch.tensor(label, dtype=torch.float32)
 
-# Simple CNN encoder
-class SimpleEncoder(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Conv2d(1, 16, 3, 1, 1),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-            nn.Conv2d(16, 32, 3, 1, 1),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-            nn.Flatten(),
-            nn.Linear(32 * 64 * 64, 256),
-            nn.ReLU()
-        )
 
-    def forward(self, x):
-        return self.net(x)
+# ----------- SiamesePairsDataset：讀取已預先生成的 pair (val) ----------- #
+class SiamesePairsDataset(Dataset):
+    def __init__(self, pair_txt, transform=None, root_dir=''):
+        """
+        pair_txt: 每行的格式是 "path/to/img1 path/to/img2 label"
+        transform: torchvision.transforms, 對 PIL Image 做處理
+        root_dir: 如果 pair_txt 中的路徑沒有指定完整路徑，可以加上此根目錄
+        """
+        self.pairs = []
+        self.transform = transform
+        self.root_dir = root_dir
 
-# Siamese network
-class SiameseNet(nn.Module):
-    def __init__(self, encoder):
-        super().__init__()
-        self.encoder = encoder
+        with open(pair_txt, 'r') as f:
+            for line in f:
+                p1, p2, label = line.strip().split()
+                # 如果路徑不是絕對路徑，就加上 root_dir
+                if not os.path.isabs(p1):
+                    p1 = os.path.join(self.root_dir, p1)
+                if not os.path.isabs(p2):
+                    p2 = os.path.join(self.root_dir, p2)
+                self.pairs.append((p1, p2, int(label)))
 
-    def forward(self, img1, img2):
-        feat1 = self.encoder(img1)
-        feat2 = self.encoder(img2)
-        return feat1, feat2
+    def __len__(self):
+        return len(self.pairs)
 
-# Contrastive loss
-class ContrastiveLoss(nn.Module):
-    def __init__(self, margin=1.0):
-        super().__init__()
-        self.margin = margin
+    def __getitem__(self, idx):
+        p1, p2, label = self.pairs[idx]
+        img1 = Image.open(p1).convert('L')
+        img2 = Image.open(p2).convert('L')
+        if self.transform:
+            img1 = self.transform(img1)
+            img2 = self.transform(img2)
+        return img1, img2, torch.tensor(label, dtype=torch.float32)
 
-    def forward(self, output1, output2, label):
-        d = torch.nn.functional.pairwise_distance(output1, output2)
-        loss = label * d.pow(2) + (1 - label) * (self.margin - d).clamp(min=0).pow(2)
-        return loss.mean()
 
+# ----------- Training Loop ----------- #
 def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
 
-    train_base = SegmentationDataset('train_fixed.txt')
-    val_base = SegmentationDataset('val_fixed.txt')
+    # ———————————— 1. 定義 transform ————————————
+    transform = transforms.Compose([
+        transforms.Resize((256, 256)),
+        transforms.ToTensor(),
+        # 如果需要 normalization，可再加上下面這行（灰階）
+        # transforms.Normalize(mean=[0.5], std=[0.5])
+    ])
 
+    # ———————————— 2. 建立 Dataset & DataLoader ————————————
+    # 訓練時：用 SegmentationDataset 載原圖 (mask 可忽略)，並生成 SiameseDataset
+    train_base = SegmentationDataset('train_fixed.txt', root_dir='train_dataset', mask_dir='masks', transform=None)
     train_dataset = SiameseDataset(train_base)
-    val_dataset = SiameseDataset(val_base)
+    train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True, num_workers=2)
 
-    train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False)
+    # 驗證時：讀取已事先生成的 val_pairs.txt
+    val_dataset = SiamesePairsDataset('val_pairs.txt', transform=transform, root_dir='train_dataset')
+    val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False, num_workers=2)
 
-    encoder = SimpleEncoder().to(device)
-    model = SiameseNet(encoder).to(device)
+    # ———————————— 3. 初始化模型、損失函數、優化器 ————————————
+    model = SiameseNetwork().to(device)
     criterion = ContrastiveLoss()
     optimizer = optim.Adam(model.parameters(), lr=1e-4)
 
+    # ———————————— 4. 開始訓練＆驗證 ————————————
     num_epochs = 30
     for epoch in range(num_epochs):
+        # ---- 4.1 Train ----
         model.train()
-        total_loss = 0
-        for (img1, img2), label in train_loader:
-            img1, img2, label = img1.to(device), img2.to(device), label.to(device)
-            feat1, feat2 = model(img1, img2)
-            loss = criterion(feat1, feat2, label)
+        total_loss = 0.0
+        for img1, img2, label in train_loader:
+            # SegmentationDataset 回傳的是 Tensor 但没有經過 resize/ToTensor，
+            # 要先把 image 轉為 FloatTensor[1×256×256]，以下示範：
+            img1 = img1.to(device)
+            img2 = img2.to(device)
+            # 下面這行若是 NumPy array，要先呼叫 transforms：
+            img1 = transform(Image.fromarray((img1.squeeze(0).cpu().numpy()*255).astype('uint8')))
+            img2 = transform(Image.fromarray((img2.squeeze(0).cpu().numpy()*255).astype('uint8')))
+            img1 = img1.unsqueeze(0).to(device)  # final shape: [1,1,256,256]
+            img2 = img2.unsqueeze(0).to(device)
+            label = label.to(device)
+
+            out1, out2 = model(img1, img2)
+            loss = criterion(out1, out2, label)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
+
         avg_loss = total_loss / len(train_loader)
         print(f"[Epoch {epoch+1}] Train Loss: {avg_loss:.4f}")
-        # ---- Validation ---- #
+
+        # ---- 4.2 Validation ----
         model.eval()
-        total_val_loss = 0
+        total_val_loss = 0.0
         correct = 0
         total = 0
 
         with torch.no_grad():
-            for (img1, img2), label in val_loader:
+            for img1, img2, label in val_loader:
                 img1, img2, label = img1.to(device), img2.to(device), label.to(device)
-                feat1, feat2 = model(img1, img2)
-                loss = criterion(feat1, feat2, label)
+                out1, out2 = model(img1, img2)
+                loss = criterion(out1, out2, label)
                 total_val_loss += loss.item()
 
-                # compute prediction based on distance
-                dist = torch.nn.functional.pairwise_distance(feat1, feat2)
-                preds = (dist < 0.5).float()  # threshold may be tuned
+                # 用距離 + 閾值 估算正/負
+                dist = torch.nn.functional.pairwise_distance(out1, out2)
+                preds = (dist < 0.5).float()  # 閾值可依驗證結果再調整
                 correct += (preds == label).sum().item()
                 total += label.size(0)
 
         avg_val_loss = total_val_loss / len(val_loader)
-        accuracy = correct / total
-        print(f"[Epoch {epoch+1}] Val Loss: {avg_val_loss:.4f} | Val Acc: {accuracy:.4f}")
+        val_acc = correct / total if total > 0 else 0
+        print(f"[Epoch {epoch+1}] Val Loss: {avg_val_loss:.4f} | Val Acc: {val_acc:.4f}")
 
+    # ———————————— 5. 儲存模型 ————————————
     torch.save(model.state_dict(), 'siamese_model_2.pth')
-    print("Model saved to siamese_model.pth")
+    print("Model saved to siamese_model_2.pth")
+
 
 if __name__ == '__main__':
     main()
