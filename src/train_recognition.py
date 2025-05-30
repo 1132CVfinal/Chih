@@ -1,87 +1,86 @@
-# train_recognition.py
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 import random
-from dataset_reader import PolarDataset  # 我們剛剛寫好的 PolarDataset
+import os
+from dataset_reader import SegmentationDataset, PolarDataset  # 請放同一目錄下
 
-# ----------- Siamese DataLoader Wrapper ----------- #
+# ----------- Siamese Dataset Wrapper ----------- #
 class SiameseDataset(torch.utils.data.Dataset):
     """
-    接收一個 PolarDataset (base_dataset)，
-    每次 __getitem__ 隨機傳回一對 (imgA, imgB) 以及 label=0/1
-       label = 1 → 同一人 (positive pair)
-       label = 0 → 不同人 (negative pair)
-    我們假設 list.txt 每行 path 中 “person_id” 可以從路徑第 1 個子目錄取得 (e.g. "CASIA-Iris-Lamp/102/...")，
-    因此利用 path.split('/') 之後的 index 1 當作 person_id。
+    接收一個 PolarDataset（base_dataset），
+    每次 __getitem__ 隨機傳回一對 (imgA, imgB) 及 label（同人=1，不同人=0）。
+    假設路徑格式： train_dataset/DataSetName/personID/eye/L or R/filename.jpg
+    → personID 視為同一人的依據，即 path.split('/')[2]
     """
     def __init__(self, base_dataset: PolarDataset):
         self.base_dataset = base_dataset
-        # 把所有 rel_path 按照 person_id 分 group
-        # 比如 "train_dataset/CASIA-Iris-Lamp/102/L/S2102L08.jpg" → person_id = "CASIA-Iris-Lamp"
-        # 其實這邊要改成你自己資料夾結構中的「person」那層 index。例如若 list 裡是 "train_dataset/CASIA-Iris-Lamp/102/L/..."，
-        # 則 person_id = path.split('/')[2] = "102"
+        # 建立 person_id → 該 person 底下的 index 列表
         from collections import defaultdict
         label_dict = defaultdict(list)
         for idx, rel_path in enumerate(self.base_dataset.image_paths):
+            # e.g. "train_dataset/CASIA-Iris-Lamp/102/L/S2102L08.jpg"
             parts = rel_path.split('/')
-            # 假設資料夾結構： train_dataset / DataSetName / personID / eye(L/R) / filename.jpg
-            #                    0             1           2        3         4
-            person_id = parts[2]
+            person_id = parts[2]  # index=2 才是 personID
             label_dict[person_id].append(idx)
-        self.labels = label_dict
+        self.labels  = label_dict
         self.indices = list(range(len(self.base_dataset)))
 
     def __len__(self):
         return len(self.base_dataset)
 
     def __getitem__(self, idx):
-        # 1. 先拿到 anchor image
+        # 1. anchor
         img1_tensor, rel_path1 = self.base_dataset[idx]
-        person1 = rel_path1.split('/')[2]  # 上述結構中 index=2 是 personID
+        parts = rel_path1.split('/')
+        person1 = parts[2]
 
-        # 2. 隨機決定 positive 或 negative
+        # 2. 隨機決定 positive(同人) or negative(異人)
         if random.random() < 0.5:
-            # positive pair：同一個 person1 底下，選一個不同 idx
+            # positive：同一 person1 底下隨機一張（不等於 idx）
             idx2 = idx
             while idx2 == idx:
                 idx2 = random.choice(self.labels[person1])
             label = torch.tensor(1.0, dtype=torch.float32)
         else:
-            # negative pair：隨機選一個 person2 ！= person1
-            other_person = random.choice(list(self.labels.keys()))
-            while other_person == person1:
-                other_person = random.choice(list(self.labels.keys()))
-            idx2 = random.choice(self.labels[other_person])
+            # negative：隨機選一個與 person1 不同的 person2
+            person2 = random.choice(list(self.labels.keys()))
+            while person2 == person1:
+                person2 = random.choice(list(self.labels.keys()))
+            idx2 = random.choice(self.labels[person2])
             label = torch.tensor(0.0, dtype=torch.float32)
 
         img2_tensor, rel_path2 = self.base_dataset[idx2]
-
-        # 3. 回傳 (img1, img2), label
+        # 回傳 (img1, img2) 與 label
         return (img1_tensor, img2_tensor), label
+
 
 # ----------- 定義 Siamese Network 架構 ----------- #
 class SiameseNetwork(nn.Module):
     def __init__(self):
         super(SiameseNetwork, self).__init__()
-        # 你可以在這邊任意改你想要的 CNN 架構
+        # 你可自行調整 CNN 架構，以下示範一個簡單版本
         self.encoder = nn.Sequential(
             nn.Conv2d(1, 32, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(32), nn.ReLU(),
-            nn.MaxPool2d(2),                           # → [32,128,128]
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+            nn.MaxPool2d(2),     # → [32,128,128]
 
             nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(64), nn.ReLU(),
-            nn.MaxPool2d(2),                           # → [64,64,64]
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.MaxPool2d(2),     # → [64,64,64]
 
             nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(128), nn.ReLU(),
-            nn.MaxPool2d(2),                           # → [128,32,32]
+            nn.BatchNorm2d(128),
+            nn.ReLU(),
+            nn.MaxPool2d(2),     # → [128,32,32]
 
-            nn.Flatten(),                              # → [128*32*32]
-            nn.Linear(128 * 32 * 32, 512), nn.ReLU(),
-            nn.Linear(512, 128)                        # 最後 embedding vector 長度 128
+            nn.Flatten(),        # → [128*32*32]
+            nn.Linear(128 * 32 * 32, 512),
+            nn.ReLU(),
+            nn.Linear(512, 128)  # 最後 embedding vector 長度 128
         )
 
     def forward_once(self, x):
@@ -92,6 +91,7 @@ class SiameseNetwork(nn.Module):
         f2 = self.forward_once(img2)
         return f1, f2
 
+
 # ----------- 對比損失 Contrastive Loss ----------- #
 class ContrastiveLoss(nn.Module):
     def __init__(self, margin=1.0):
@@ -101,39 +101,38 @@ class ContrastiveLoss(nn.Module):
     def forward(self, f1, f2, label):
         # label=1 → 同人，要把距離拉小； label=0 → 異人，要把距離拉大
         dist = nn.functional.pairwise_distance(f1, f2, keepdim=True)  # [batch,1]
-        # Loss = label * dist^2 + (1-label) * max(margin - dist, 0)^2
         loss_pos = label * (dist ** 2)
         loss_neg = (1 - label) * torch.clamp(self.margin - dist, min=0.0) ** 2
         return torch.mean(loss_pos + loss_neg)
 
-# ----------- Training Loop (main) ----------- #
-# ... 其餘 SiameseDataset / SiameseNetwork / ContrastiveLoss 都一樣 ...
 
+# ----------- Training Loop (main) ----------- #
 def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print("Using device:", device)
 
-    # ---- 1. 建立訓練集 & 驗證集 PolarDataset ----
+    # ---- 1. 準備訓練集 & 驗證集 PolarDataset ----
     train_list = "train_fixed.txt"
-    val_list   = "val_fixed.txt"       # 你自己準備的驗證集列表
+    val_list   = "val_fixed.txt"  # 你自行準備的 validation 列表
 
+    # PolarDataset 會自動做 RITNet segmentation + iris normalization → 回傳 [1,256,256]
     polar_train = PolarDataset(
         list_file=train_list,
-        root_dir=".",
-        ritnet_model_path="../RITnet/best_model.pkl"
+        root_dir=".",  # 代表 train_fixed.txt 裡面寫的相對路徑，都以 "." 為基底
+        ritnet_model_path="RITnet/best_model.pkl"
     )
     polar_val = PolarDataset(
         list_file=val_list,
         root_dir=".",
-        ritnet_model_path="../RITnet/best_model.pkl"
+        ritnet_model_path="RITnet/best_model.pkl"
     )
 
-    # 再包成 SiameseDataset
+    # 再把它們包成 SiameseDataset
     siamese_train = SiameseDataset(polar_train)
     siamese_val   = SiameseDataset(polar_val)
 
-    train_loader = DataLoader(siamese_train, batch_size=16, shuffle=True,  num_workers=4)
-    val_loader   = DataLoader(siamese_val,   batch_size=16, shuffle=False, num_workers=4)
+    train_loader = DataLoader(siamese_train, batch_size=16, shuffle=True, num_workers=2)
+    val_loader   = DataLoader(siamese_val,   batch_size=16, shuffle=False, num_workers=2)
 
     # ---- 2. 定義網路 & 損失函數 & 優化器 ----
     model     = SiameseNetwork().to(device)
@@ -186,11 +185,11 @@ def main():
 
                 # 計算 distance，再用 threshold 決定是否判為同人
                 dist = nn.functional.pairwise_distance(f1, f2)
-                preds = (dist < 0.5).float()  # 可以把 0.5 換成你想要的 threshold
+                preds = (dist < 0.5).float()  # threshold 可自行調整
                 correct += (preds == label).sum().item()
                 total += label.size(0)
 
-        avg_val_loss = val_loss / len(val_loader)
+        avg_val_loss = val_loss / len(val_loader) if len(val_loader) > 0 else 0.0
         val_acc = correct / total if total > 0 else 0.0
         print(f"[Epoch {epoch+1:02d}/{num_epochs}] Val   Loss: {avg_val_loss:.4f} | Val Acc: {val_acc:.4f}")
 
