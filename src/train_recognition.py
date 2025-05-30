@@ -83,7 +83,7 @@ def train():
     criterion = ContrastiveLoss()
     optimizer = optim.Adam(model.parameters(), lr=1e-3)
 
-    for epoch in range(10):
+    for epoch in range(30):
         total_loss = 0.0
         model.train()
         for img1, img2, label in train_loader:
@@ -205,7 +205,7 @@ def main():
     criterion = ContrastiveLoss()
     optimizer = optim.Adam(model.parameters(), lr=1e-4)
 
-    num_epochs = 10
+    num_epochs = 30
     for epoch in range(num_epochs):
         model.train()
         total_loss = 0
