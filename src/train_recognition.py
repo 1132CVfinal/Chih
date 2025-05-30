@@ -118,12 +118,12 @@ def main():
     # PolarDataset 會自動做 RITNet segmentation + iris normalization → 回傳 [1,256,256]
     polar_train = PolarDataset(
         list_file=train_list,
-        root_dir=".",  # 代表 train_fixed.txt 裡面寫的相對路徑，都以 "." 為基底
+        root_dir="train_dataset",  # 代表 train_fixed.txt 裡面寫的相對路徑，都以 "train_dataset" 為基底
         ritnet_model_path="../RITnet/best_model.pkl"
     )
     polar_val = PolarDataset(
         list_file=val_list,
-        root_dir=".",
+        root_dir="train_dataset",
         ritnet_model_path="../RITnet/best_model.pkl"
     )
 

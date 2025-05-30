@@ -4,7 +4,7 @@ import cv2
 import os
 
 class IrisDataset(Dataset):
-    def __init__(self, list_file, root_dir='.', transform=None):
+    def __init__(self, list_file, root_dir='train_dataset', transform=None):
         """
         list_file: 包含影像路徑的文字檔 ( 每行一張圖片路徑，相對於 root_dir)
         root_dir: 影像路徑的根目錄

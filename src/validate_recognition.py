@@ -40,7 +40,7 @@ def main():
     val_list = "val_fixed.txt"
     polar_val = PolarDataset(
         list_file=val_list,
-        root_dir=".", 
+        root_dir="train_dataset", 
         ritnet_model_path="../RITnet/best_model.pkl"
     )
 
