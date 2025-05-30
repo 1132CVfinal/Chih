@@ -21,7 +21,6 @@ def main(image_list_txt, input_root='train_dataset', mask_root='masks', model_pa
 
     for img_path in img_paths:
         full_img_path = img_path.replace('\\', os.sep)  # 兼容不同系統路徑
-        full_img_path = input_root + '/' + full_img_path
         print(f"Processing {full_img_path} ...")
         img = cv2.imread(full_img_path, cv2.IMREAD_GRAYSCALE)
         if img is None:
