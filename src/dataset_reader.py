@@ -107,13 +107,13 @@ class PolarDataset(Dataset):
     經過 RITNetInference 做 segmentation → normalize (polar)
     最終輸出一張 [1,256,256] 的 Tensor（已經做完 polar 展開並 resize）
     """
-    def __init__(self, list_file, root_dir='.', ritnet_model_path='RITnet/best_model.pkl'):
+    def __init__(self, list_file, root_dir='.', ritnet_model_path='../RITnet/best_model.pkl'):
         """
         list_file: 每行「相對於 root_dir」的影像路徑，
                    例如：train_dataset/CASIA-Iris-Lamp/102/L/S2102L08.jpg
         root_dir: 這些相對路徑的參考根目錄（通常設 "."）
         ritnet_model_path: RITNet 的權重檔 (.pkl)，
-                           相對於這支程式所在位置（此範例為 "RITnet/best_model.pkl"）
+                           相對於這支程式所在位置（此範例為 "../RITnet/best_model.pkl"）
         """
         # 1. 讀 list.txt 裡的每行路徑
         with open(list_file, 'r') as f:

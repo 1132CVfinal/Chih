@@ -119,12 +119,12 @@ def main():
     polar_train = PolarDataset(
         list_file=train_list,
         root_dir=".",  # 代表 train_fixed.txt 裡面寫的相對路徑，都以 "." 為基底
-        ritnet_model_path="RITnet/best_model.pkl"
+        ritnet_model_path="../RITnet/best_model.pkl"
     )
     polar_val = PolarDataset(
         list_file=val_list,
         root_dir=".",
-        ritnet_model_path="RITnet/best_model.pkl"
+        ritnet_model_path="../RITnet/best_model.pkl"
     )
 
     # 再把它們包成 SiameseDataset

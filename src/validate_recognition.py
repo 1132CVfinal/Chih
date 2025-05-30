@@ -36,12 +36,12 @@ def main():
     full_model.eval()
 
     # 2. 建立 validation 用的 PolarDataset（只需要 val_fixed.txt 即可）
-    #    注意：ritnet_model_path 以 src/ 為工作目錄，要指到專案根目錄裡的 RITnet/best_model.pkl
+    #    注意：ritnet_model_path 以 src/ 為工作目錄，要指到專案根目錄裡的 ../RITnet/best_model.pkl
     val_list = "val_fixed.txt"
     polar_val = PolarDataset(
         list_file=val_list,
         root_dir=".", 
-        ritnet_model_path="RITnet/best_model.pkl"
+        ritnet_model_path="../RITnet/best_model.pkl"
     )
 
     # 3. 先把所有 val 圖都跑一次 encoder，記錄其 embedding
