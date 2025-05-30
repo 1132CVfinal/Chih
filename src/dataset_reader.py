@@ -2,6 +2,7 @@ import torch
 from torch.utils.data import Dataset
 import cv2
 import os
+import numpy as np
 
 class IrisDataset(Dataset):
     def __init__(self, list_file, root_dir='train_dataset', transform=None):

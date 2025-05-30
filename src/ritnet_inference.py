@@ -9,6 +9,7 @@ from torchvision import transforms
 import torch.nn.functional as F
 from densenet import DenseNet2D
 import math
+import numpy as np
 
 class RITNetInference:
     def __init__(self, model_path='best_model.pkl', device='cuda' if torch.cuda.is_available() else 'cpu'):

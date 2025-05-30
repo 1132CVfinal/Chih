@@ -5,6 +5,7 @@ from torch.utils.data import DataLoader
 import random
 import os
 from dataset_reader import SegmentationDataset, PolarDataset  # 請放同一目錄下
+import numpy as np
 
 # ----------- Siamese Dataset Wrapper ----------- #
 class SiameseDataset(torch.utils.data.Dataset):
