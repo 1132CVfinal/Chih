@@ -100,69 +100,62 @@ class SegmentationDataset(Dataset):
         return image, mask
 
 
+import os
+import cv2
+import torch
+from torch.utils.data import Dataset
+import numpy as np
 from ritnet_inference import RITNetInference
+from improved_iris_recognition import ImprovedIrisRecognition
 
 class PolarDataset(Dataset):
     """
     將 list.txt（每行一張灰階 iris 圖相對路徑）
-    經過 RITNetInference 做 segmentation → normalize (polar)
+    經過 RITNet 做 segmentation → ImprovedIrisRecognition 做 normalize (polar)
     最終輸出一張 [1,256,256] 的 Tensor（已經做完 polar 展開並 resize）
     """
     def __init__(self, list_file, root_dir='.', ritnet_model_path='../RITnet/best_model.pkl'):
-        """
-        list_file: 每行「相對於 root_dir」的影像路徑，
-                   例如：train_dataset/CASIA-Iris-Lamp/102/L/S2102L08.jpg
-        root_dir: 這些相對路徑的參考根目錄（通常設 "."）
-        ritnet_model_path: RITNet 的權重檔 (.pkl)，
-                           相對於這支程式所在位置（此範例為 "../RITnet/best_model.pkl"）
-        """
-        # 1. 讀 list.txt 裡的每行路徑
         with open(list_file, 'r') as f:
             lines = f.readlines()
         self.image_paths = [line.strip() for line in lines if line.strip()]
         self.root_dir = root_dir
 
-        # 2. 載入 RITNetInference，供 segmentation + normalize 使用
+        # 用 RITNet 做 segmentation
         self.ritnet = RITNetInference(
             model_path=ritnet_model_path,
             device='cuda' if torch.cuda.is_available() else 'cpu'
         )
 
-        # 3. 決定將 normalize 出來的 polar 圖（32×64）resize 到多大：
+        # 用 ImprovedIrisRecognition 處理邊界與 normalize
+        self.improved = ImprovedIrisRecognition()
+
         self.desired_size = (256, 256)
 
     def __len__(self):
         return len(self.image_paths)
 
     def __getitem__(self, idx):
-        # 1. 讀原始灰階影像
         rel_path = self.image_paths[idx]
         abs_path = os.path.join(self.root_dir, rel_path)
         img = cv2.imread(abs_path, cv2.IMREAD_GRAYSCALE)
         if img is None:
             raise FileNotFoundError(f"Cannot read image at {abs_path}")
 
-        # 2. segmentation → 取得 iris_mask, pupil_mask
+        # segmentation → 取得 iris_mask, pupil_mask
         iris_mask, pupil_mask, _, _ = self.ritnet.segment_iris(img)
-        #    如果 RITNet segmentation 失敗，內部會 fallback 用 HoughCircles
 
-        # 3. 找邊界、normalize → 得到 2D numpy array（size = 32×64）
-        boundaries   = self.ritnet.find_iris_boundaries(iris_mask, pupil_mask)
-        normalized   = None
+        # boundary + normalization
+        boundaries = self.improved.find_iris_boundaries(iris_mask, pupil_mask)
         iris_bbox, pupil_bbox = boundaries
+        normalized = None
         if iris_bbox is not None and pupil_bbox is not None:
-            normalized = self.ritnet.normalize_iris(img, iris_bbox, pupil_bbox)
+            normalized = self.improved.normalize_iris(img, iris_bbox, pupil_bbox)
 
         if normalized is None:
-            # segmentation/boundary 若失敗，就把原圖縮到 (64×32)，再放大到 (256×256)
             fallback = cv2.resize(img, (64, 32), interpolation=cv2.INTER_LINEAR)
             normalized = fallback.astype(np.uint8)
 
-        # 4. 將 (32×64) 的 normalized 放大到 (256×256)
         normalized_resized = cv2.resize(normalized, self.desired_size, interpolation=cv2.INTER_LINEAR)
-
-        # 5. 轉成 Tensor 並 normalize 到 [0,1] → shape [1,256,256]
         tensor = torch.tensor(normalized_resized / 255.0, dtype=torch.float32).unsqueeze(0)
 
-        # 6. 回傳 Tensor 與 rel_path（如果只要輸出 Tensor，也可只回一個）
         return tensor, rel_path
