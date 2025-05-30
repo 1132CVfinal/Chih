@@ -1,222 +1,202 @@
+# train_recognition.py
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader
 import random
-from PIL import Image
-from torchvision import transforms
-import os
+from dataset_reader import PolarDataset  # 我們剛剛寫好的 PolarDataset
 
-from dataset_reader import SegmentationDataset  # 只用到 image，不用 mask
-
-# ----------- Simple Siamese Network ----------- #
-class SiameseNetwork(nn.Module):
-    def __init__(self):
-        super(SiameseNetwork, self).__init__()
-        self.encoder = nn.Sequential(
-            nn.Conv2d(1, 32, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-            nn.Flatten(),
-            nn.Linear(64 * 64 * 64, 256),  # 輸入為 256×256，經兩次 MaxPool → 64×64
-            nn.ReLU(),
-            nn.Linear(256, 128)
-        )
-
-    def forward_once(self, x):
-        return self.encoder(x)
-
-    def forward(self, x1, x2):
-        out1 = self.forward_once(x1)
-        out2 = self.forward_once(x2)
-        return out1, out2
-
-
-# ----------- Contrastive Loss ----------- #
-class ContrastiveLoss(nn.Module):
-    def __init__(self, margin=1.0):
-        super(ContrastiveLoss, self).__init__()
-        self.margin = margin
-
-    def forward(self, output1, output2, label):
-        euclidean_distance = nn.functional.pairwise_distance(output1, output2)
-        loss = torch.mean(
-            (1 - label) * torch.pow(euclidean_distance, 2) +
-            label * torch.pow(torch.clamp(self.margin - euclidean_distance, min=0.0), 2)
-        )
-        return loss
-
-
-# ----------- SiameseDataset：從 SegmentationDataset 產生正負 pair ----------- #
-class SiameseDataset(Dataset):
-    def __init__(self, base_dataset):
-        """
-        base_dataset: SegmentationDataset，__getitem__ 回傳 (Tensor_image, Tensor_mask)
-        我們只用到 image → base_dataset[idx][0]
-        """
+# ----------- Siamese DataLoader Wrapper ----------- #
+class SiameseDataset(torch.utils.data.Dataset):
+    """
+    接收一個 PolarDataset (base_dataset)，
+    每次 __getitem__ 隨機傳回一對 (imgA, imgB) 以及 label=0/1
+       label = 1 → 同一人 (positive pair)
+       label = 0 → 不同人 (negative pair)
+    我們假設 list.txt 每行 path 中 “person_id” 可以從路徑第 1 個子目錄取得 (e.g. "CASIA-Iris-Lamp/102/...")，
+    因此利用 path.split('/') 之後的 index 1 當作 person_id。
+    """
+    def __init__(self, base_dataset: PolarDataset):
         self.base_dataset = base_dataset
-        # 解析 person_id；假設路徑格式為 'CASIA-Iris-Thousand/447/L/S5447L00.jpg'
-        self.labels = [path.split('/')[1] for path in base_dataset.image_paths]
-
-        # 把相同 person_id 的索引分組
+        # 把所有 rel_path 按照 person_id 分 group
+        # 比如 "train_dataset/CASIA-Iris-Lamp/102/L/S2102L08.jpg" → person_id = "CASIA-Iris-Lamp"
+        # 其實這邊要改成你自己資料夾結構中的「person」那層 index。例如若 list 裡是 "train_dataset/CASIA-Iris-Lamp/102/L/..."，
+        # 則 person_id = path.split('/')[2] = "102"
         from collections import defaultdict
         label_dict = defaultdict(list)
-        for i, person_id in enumerate(self.labels):
-            label_dict[person_id].append(i)
-        self.label_dict = label_dict
+        for idx, rel_path in enumerate(self.base_dataset.image_paths):
+            parts = rel_path.split('/')
+            # 假設資料夾結構： train_dataset / DataSetName / personID / eye(L/R) / filename.jpg
+            #                    0             1           2        3         4
+            person_id = parts[2]
+            label_dict[person_id].append(idx)
+        self.labels = label_dict
+        self.indices = list(range(len(self.base_dataset)))
 
     def __len__(self):
         return len(self.base_dataset)
 
     def __getitem__(self, idx):
-        # 取第一張影像 Tensor
-        img1, _ = self.base_dataset[idx]  # img1 形狀 [1,256,256]
-        person1 = self.labels[idx]
+        # 1. 先拿到 anchor image
+        img1_tensor, rel_path1 = self.base_dataset[idx]
+        person1 = rel_path1.split('/')[2]  # 上述結構中 index=2 是 personID
 
-        # 隨機決定正樣本（同人）還是負樣本（異人）
+        # 2. 隨機決定 positive 或 negative
         if random.random() < 0.5:
-            # positive pair
+            # positive pair：同一個 person1 底下，選一個不同 idx
             idx2 = idx
             while idx2 == idx:
-                idx2 = random.choice(self.label_dict[person1])
-            label = 1.0
+                idx2 = random.choice(self.labels[person1])
+            label = torch.tensor(1.0, dtype=torch.float32)
         else:
-            # negative pair
-            person2 = random.choice(list(self.label_dict.keys()))
-            while person2 == person1:
-                person2 = random.choice(list(self.label_dict.keys()))
-            idx2 = random.choice(self.label_dict[person2])
-            label = 0.0
+            # negative pair：隨機選一個 person2 ！= person1
+            other_person = random.choice(list(self.labels.keys()))
+            while other_person == person1:
+                other_person = random.choice(list(self.labels.keys()))
+            idx2 = random.choice(self.labels[other_person])
+            label = torch.tensor(0.0, dtype=torch.float32)
 
-        img2, _ = self.base_dataset[idx2]  # img2 形狀 [1,256,256]
-        return img1, img2, torch.tensor(label, dtype=torch.float32)
+        img2_tensor, rel_path2 = self.base_dataset[idx2]
 
+        # 3. 回傳 (img1, img2), label
+        return (img1_tensor, img2_tensor), label
 
-# ----------- SiamesePairsDataset：讀 val_pairs.txt (p1, p2, label) ----------- #
-class SiamesePairsDataset(Dataset):
-    def __init__(self, pair_txt, transform=None, root_dir=''):
-        """
-        pair_txt: 每行 "相對路徑1 相對路徑2 label"
-                  EX: "CASIA-Iris-Thousand/447/L/S5447L00.jpg CASIA-Iris-Thousand/447/L/S5447L01.jpg 1"
-        transform: torchvision.transforms，只處理 PIL Image
-        root_dir: 如果 pair_txt 中路徑不是絕對路徑，就在前面加上 root_dir
-        """
-        self.pairs = []
-        self.transform = transform
-        self.root_dir = root_dir
+# ----------- 定義 Siamese Network 架構 ----------- #
+class SiameseNetwork(nn.Module):
+    def __init__(self):
+        super(SiameseNetwork, self).__init__()
+        # 你可以在這邊任意改你想要的 CNN 架構
+        self.encoder = nn.Sequential(
+            nn.Conv2d(1, 32, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(32), nn.ReLU(),
+            nn.MaxPool2d(2),                           # → [32,128,128]
 
-        with open(pair_txt, 'r') as f:
-            for line in f:
-                p1, p2, label = line.strip().split()
-                if not os.path.isabs(p1):
-                    p1 = os.path.join(self.root_dir, p1)
-                if not os.path.isabs(p2):
-                    p2 = os.path.join(self.root_dir, p2)
-                self.pairs.append((p1, p2, int(label)))
+            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(64), nn.ReLU(),
+            nn.MaxPool2d(2),                           # → [64,64,64]
 
-    def __len__(self):
-        return len(self.pairs)
+            nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(128), nn.ReLU(),
+            nn.MaxPool2d(2),                           # → [128,32,32]
 
-    def __getitem__(self, idx):
-        p1, p2, label = self.pairs[idx]
-        img1 = Image.open(p1).convert('L')
-        img2 = Image.open(p2).convert('L')
-        if self.transform:
-            img1 = self.transform(img1)  # 變成 [1,256,256]
-            img2 = self.transform(img2)
-        return img1, img2, torch.tensor(label, dtype=torch.float32)
+            nn.Flatten(),                              # → [128*32*32]
+            nn.Linear(128 * 32 * 32, 512), nn.ReLU(),
+            nn.Linear(512, 128)                        # 最後 embedding vector 長度 128
+        )
 
+    def forward_once(self, x):
+        return self.encoder(x)
 
-# ----------- Training & Validation Loop ----------- #
+    def forward(self, img1, img2):
+        f1 = self.forward_once(img1)  # [batch,128]
+        f2 = self.forward_once(img2)
+        return f1, f2
+
+# ----------- 對比損失 Contrastive Loss ----------- #
+class ContrastiveLoss(nn.Module):
+    def __init__(self, margin=1.0):
+        super(ContrastiveLoss, self).__init__()
+        self.margin = margin
+
+    def forward(self, f1, f2, label):
+        # label=1 → 同人，要把距離拉小； label=0 → 異人，要把距離拉大
+        dist = nn.functional.pairwise_distance(f1, f2, keepdim=True)  # [batch,1]
+        # Loss = label * dist^2 + (1-label) * max(margin - dist, 0)^2
+        loss_pos = label * (dist ** 2)
+        loss_neg = (1 - label) * torch.clamp(self.margin - dist, min=0.0) ** 2
+        return torch.mean(loss_pos + loss_neg)
+
+# ----------- Training Loop (main) ----------- #
+# ... 其餘 SiameseDataset / SiameseNetwork / ContrastiveLoss 都一樣 ...
+
 def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"Using device: {device}")
+    print("Using device:", device)
 
-    # 1. 定義 transform（專為 PIL 用）
-    transform = transforms.Compose([
-        transforms.Resize((256, 256)),
-        transforms.ToTensor(),
-        # 如果要 normalize：（灰階）
-        # transforms.Normalize(mean=[0.5], std=[0.5])
-    ])
+    # ---- 1. 建立訓練集 & 驗證集 PolarDataset ----
+    train_list = "train_fixed.txt"
+    val_list   = "val_fixed.txt"       # 你自己準備的驗證集列表
 
-    # 2. 建立訓練資料 (SegmentationDataset) 及其對應的 SiameseDataset
-    train_base = SegmentationDataset(
-        list_file='train_fixed.txt',
-        root_dir='train_dataset',
-        mask_dir='masks',
-        transform=None  # SegmentationDataset 已經 resize & 給出 Tensor
+    polar_train = PolarDataset(
+        list_file=train_list,
+        root_dir=".",
+        ritnet_model_path="RITnet/best_model.pkl"
     )
-    train_dataset = SiameseDataset(train_base)
-    train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True, num_workers=2)
-
-    # 3. 建立驗證資料 (SiamesePairsDataset) 需要先產出 val_pairs.txt
-    val_dataset = SiamesePairsDataset(
-        pair_txt='val_pairs.txt',
-        transform=transform,
-        root_dir='train_dataset'  # 讀取時會自動拼成 "train_dataset/CASIA-..."
+    polar_val = PolarDataset(
+        list_file=val_list,
+        root_dir=".",
+        ritnet_model_path="RITnet/best_model.pkl"
     )
-    val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False, num_workers=2)
 
-    # 4. 初始化模型、Loss、優化器
-    model = SiameseNetwork().to(device)
-    criterion = ContrastiveLoss()
+    # 再包成 SiameseDataset
+    siamese_train = SiameseDataset(polar_train)
+    siamese_val   = SiameseDataset(polar_val)
+
+    train_loader = DataLoader(siamese_train, batch_size=16, shuffle=True,  num_workers=4)
+    val_loader   = DataLoader(siamese_val,   batch_size=16, shuffle=False, num_workers=4)
+
+    # ---- 2. 定義網路 & 損失函數 & 優化器 ----
+    model     = SiameseNetwork().to(device)
+    criterion = ContrastiveLoss(margin=1.0)
     optimizer = optim.Adam(model.parameters(), lr=1e-4)
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
 
     num_epochs = 30
     for epoch in range(num_epochs):
-        # ---------- Training ----------
+        # ===== Train =====
         model.train()
         total_loss = 0.0
-        for img1, img2, label in train_loader:
-            # train_base 已回傳 [1,256,256] 的 Tensor，因此不用再轉 PIL
-            img1 = img1.to(device)  # [B,1,256,256]
+        for (img1, img2), label in train_loader:
+            img1 = img1.to(device)  # [batch,1,256,256]
             img2 = img2.to(device)
-            label = label.to(device)  # [B]
+            label = label.to(device).unsqueeze(1)  # [batch,1]
 
-            out1, out2 = model(img1, img2)
-            loss = criterion(out1, out2, label)
+            f1, f2 = model(img1, img2)
+            loss = criterion(f1, f2, label)
+
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+
             total_loss += loss.item()
 
-        avg_loss = total_loss / len(train_loader)
-        print(f"[Epoch {epoch+1}] Train Loss: {avg_loss:.4f}")
+        avg_train_loss = total_loss / len(train_loader)
+        print(f"[Epoch {epoch+1:02d}/{num_epochs}] Train Loss: {avg_train_loss:.4f}")
 
-        # ---------- Validation ----------
+        scheduler.step()
+
+        # 每 5 個 epoch 存一次模型（可選）
+        if (epoch + 1) % 5 == 0:
+            torch.save(model.state_dict(), f"siamese_epoch{epoch+1}.pth")
+
+        # ===== Validation =====
         model.eval()
-        total_val_loss = 0.0
-        correct = 0
-        total = 0
+        val_loss = 0.0
+        correct, total = 0, 0
 
         with torch.no_grad():
-            for img1, img2, label in val_loader:
-                img1 = img1.to(device)  # 這裡 img1, img2 已經是 [B,1,256,256]
+            for (img1, img2), label in val_loader:
+                img1 = img1.to(device)
                 img2 = img2.to(device)
-                label = label.to(device)
+                label = label.to(device).unsqueeze(1)
 
-                out1, out2 = model(img1, img2)
-                loss = criterion(out1, out2, label)
-                total_val_loss += loss.item()
+                f1, f2 = model(img1, img2)
+                loss = criterion(f1, f2, label)
+                val_loss += loss.item()
 
-                # 用歐式距離加閾值判斷正/負
-                dist = torch.nn.functional.pairwise_distance(out1, out2)
-                preds = (dist < 0.5).float()  # 閾值可在驗證結果後再微調
+                # 計算 distance，再用 threshold 決定是否判為同人
+                dist = nn.functional.pairwise_distance(f1, f2)
+                preds = (dist < 0.5).float()  # 可以把 0.5 換成你想要的 threshold
                 correct += (preds == label).sum().item()
                 total += label.size(0)
 
-        avg_val_loss = total_val_loss / len(val_loader)
-        val_acc = correct / total if total > 0 else 0
-        print(f"[Epoch {epoch+1}] Val Loss: {avg_val_loss:.4f} | Val Acc: {val_acc:.4f}")
+        avg_val_loss = val_loss / len(val_loader)
+        val_acc = correct / total if total > 0 else 0.0
+        print(f"[Epoch {epoch+1:02d}/{num_epochs}] Val   Loss: {avg_val_loss:.4f} | Val Acc: {val_acc:.4f}")
 
-    # 5. 儲存模型
-    torch.save(model.state_dict(), 'siamese_model_2.pth')
-    print("Model saved to siamese_model_2.pth")
+    # ---- 訓練結束後存 final model ----
+    torch.save(model.state_dict(), "siamese_final.pth")
+    print("Training completed. Model saved to siamese_final.pth")
 
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
