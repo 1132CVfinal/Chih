@@ -97,6 +97,24 @@ class RITNetInference:
         cropped = image[ymin : ymax+1, xmin : xmax+1]
         return cropped
 
+    def find_iris_boundaries(self, iris_mask, pupil_mask):
+        """
+        從 iris_mask 與 pupil_mask 中找出邊界。
+        回傳 (iris_bbox, pupil_bbox)，每個 bbox 是 (xmin, ymin, xmax, ymax)。
+        如果某個 mask 沒有找到任何像素，對應的 bbox 就是 None。
+        """
+        def get_bbox(mask):
+            ys, xs = np.where(mask > 0)
+            if len(xs) == 0 or len(ys) == 0:
+                return None
+            return (xs.min(), ys.min(), xs.max(), ys.max())
+        
+        iris_bbox = get_bbox(iris_mask)
+        pupil_bbox = get_bbox(pupil_mask)
+
+        return iris_bbox, pupil_bbox
+
+
 
 if __name__ == "__main__":
     ritnet = RITNetInference('best_model.pkl')
@@ -115,19 +133,3 @@ if __name__ == "__main__":
     print(f"Pupil pixel count: {np.sum(pupil_mask)}")
 
 
-def find_iris_boundaries(self, iris_mask, pupil_mask):
-    """
-    從 iris_mask 與 pupil_mask 中找出邊界。
-    回傳 (iris_bbox, pupil_bbox)，每個 bbox 是 (xmin, ymin, xmax, ymax)。
-    如果某個 mask 沒有找到任何像素，對應的 bbox 就是 None。
-    """
-    def get_bbox(mask):
-        ys, xs = np.where(mask > 0)
-        if len(xs) == 0 or len(ys) == 0:
-            return None
-        return (xs.min(), ys.min(), xs.max(), ys.max())
-    
-    iris_bbox = get_bbox(iris_mask)
-    pupil_bbox = get_bbox(pupil_mask)
-
-    return iris_bbox, pupil_bbox
