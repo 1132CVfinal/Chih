@@ -219,8 +219,30 @@ def main():
             total_loss += loss.item()
         avg_loss = total_loss / len(train_loader)
         print(f"[Epoch {epoch+1}] Train Loss: {avg_loss:.4f}")
+        # ---- Validation ---- #
+        model.eval()
+        total_val_loss = 0
+        correct = 0
+        total = 0
 
-    torch.save(model.state_dict(), 'siamese_model.pth')
+        with torch.no_grad():
+            for (img1, img2), label in val_loader:
+                img1, img2, label = img1.to(device), img2.to(device), label.to(device)
+                feat1, feat2 = model(img1, img2)
+                loss = criterion(feat1, feat2, label)
+                total_val_loss += loss.item()
+
+                # compute prediction based on distance
+                dist = torch.nn.functional.pairwise_distance(feat1, feat2)
+                preds = (dist < 0.5).float()  # threshold may be tuned
+                correct += (preds == label).sum().item()
+                total += label.size(0)
+
+        avg_val_loss = total_val_loss / len(val_loader)
+        accuracy = correct / total
+        print(f"[Epoch {epoch+1}] Val Loss: {avg_val_loss:.4f} | Val Acc: {accuracy:.4f}")
+
+    torch.save(model.state_dict(), 'siamese_model_2.pth')
     print("Model saved to siamese_model.pth")
 
 if __name__ == '__main__':
