@@ -38,4 +38,4 @@ def build_val_pairs(txt_path, output_path, num_pairs=1000):
     print(f"Saved {len(pairs)} pairs to {output_path}")
 
 # example usage:
-# build_val_pairs('val_fixed.txt', 'val_pairs.txt', num_pairs=1000)
+build_val_pairs('val_fixed.txt', 'val_pairs.txt', num_pairs=1000)
