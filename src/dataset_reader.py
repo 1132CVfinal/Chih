@@ -148,8 +148,9 @@ class PolarDataset(Dataset):
         # 3. 找邊界、normalize → 得到 2D numpy array（size = 32×64）
         boundaries   = self.ritnet.find_iris_boundaries(iris_mask, pupil_mask)
         normalized   = None
-        if boundaries[0] is not None:
-            normalized = self.ritnet.normalize_iris(img, *boundaries)
+        iris_bbox, pupil_bbox = boundaries
+        if iris_bbox is not None and pupil_bbox is not None:
+            normalized = self.ritnet.normalize_iris(img, iris_bbox, pupil_bbox)
 
         if normalized is None:
             # segmentation/boundary 若失敗，就把原圖縮到 (64×32)，再放大到 (256×256)
