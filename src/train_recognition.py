@@ -120,12 +120,12 @@ def main():
     polar_train = PolarDataset(
         list_file=train_list,
         root_dir=".",
-        ritnet_model_path="RITnet/best_model.pkl"
+        ritnet_model_path="../RITnet/best_model.pkl"
     )
     polar_val = PolarDataset(
         list_file=val_list,
         root_dir=".",
-        ritnet_model_path="RITnet/best_model.pkl"
+        ritnet_model_path="../RITnet/best_model.pkl"
     )
 
     # 再包成 SiameseDataset

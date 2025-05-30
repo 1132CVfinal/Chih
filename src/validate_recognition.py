@@ -38,7 +38,7 @@ def main():
     val_fixed_list = "val_fixed.txt"
     polar_val = PolarDataset(list_file=val_fixed_list,
                              root_dir=".",
-                             ritnet_model_path="RITnet/best_model.pkl")
+                             ritnet_model_path="../RITnet/best_model.pkl")
 
     # 3. 先把所有 validation 圖的 embedding 算好，存在 dict {rel_path: feat_vector}
     feat_dict = build_tensor_dict(polar_val, encoder, device)

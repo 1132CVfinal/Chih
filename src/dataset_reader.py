@@ -100,7 +100,7 @@ class PolarDataset(Dataset):
     讀一個 list.txt (每行一張灰階 iris 圖的相對路徑)，
     利用 RITNetInference segment+normalize → 回傳一個 [1, 256, 256] 的 Tensor polar 圖
     """
-    def __init__(self, list_file, root_dir='.', ritnet_model_path='RITnet/best_model.pkl'):
+    def __init__(self, list_file, root_dir='.', ritnet_model_path='../RITnet/best_model.pkl'):
         """
         list_file: 每行一張圖片相對路徑 (例如 "train_dataset/CASIA-Iris-Lamp/102/L/S2102L08.jpg")
         root_dir: 這些相對路徑對應的根目錄 (通常是專案根目錄)
